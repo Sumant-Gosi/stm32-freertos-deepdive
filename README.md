@@ -82,6 +82,9 @@ Both tasks tried to write to the UART hardware at the same time and corrupted ea
 
 The fix was a **mutex** (mutual exclusion lock). Only one task can hold the mutex at a time. The other task blocks until the first releases it. After wrapping every `UART_Print()` call in `osMutexAcquire()` and `osMutexRelease()`, the output became perfectly clean.
 
+<img width="491" height="715" alt="Screenshot 2026-03-05 at 09 21 30" src="https://github.com/user-attachments/assets/688a4974-d04e-4dad-8e18-a13250741927" />
+
+
 **Key insight:** The queue controls *when* tasks communicate. The mutex controls *safe access* to shared hardware. They solve different problems and are used together.
 
 ---
@@ -105,6 +108,8 @@ Semaphore: ButtonTask → [signal only]  → ConsumerTask
 
 The output is identical to Chapter 1. That's the point — same behavior, simpler mechanism.
 
+<img width="475" height="552" alt="Screenshot 2026-03-05 at 09 41 16" src="https://github.com/user-attachments/assets/b0adc477-3500-45a6-b77a-04a3e62f24ae" />
+
 ---
 
 ### Chapter 3 — Task Notifications (`feature/task-notifications`)
@@ -122,6 +127,9 @@ ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 ```
 
 No object to create. No handle to manage. Less RAM, faster, and the intent reads clearly in code — one task gives, one task takes.
+
+<img width="513" height="687" alt="Screenshot 2026-03-05 at 10 54 14" src="https://github.com/user-attachments/assets/0cdfd424-54ff-4d7a-8c1a-cf20477bca75" />
+
 
 The limitation: task notifications are point-to-point. One sender, one specific receiver. Semaphores can signal any waiting task. For this use case — button to consumer — notifications are the right tool.
 
