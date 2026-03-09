@@ -202,6 +202,9 @@ Phase 2 output:
 [MedTask]  Running freely...                 ← correct order restored
 ```
 
+<img width="515" height="780" alt="Screenshot 2026-03-05 at 11 40 39" src="https://github.com/user-attachments/assets/c417d136-1de5-4199-8a7e-ce827899667a" />
+
+
 **Why a semaphore causes the bug but a mutex fixes it:**
 
 Semaphores have no concept of ownership. No task "owns" a semaphore — anyone can release it. Because of this, a semaphore cannot implement priority inheritance. It has no way to know which task is holding it.
@@ -249,6 +252,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 ```
+<img width="491" height="715" alt="Screenshot 2026-03-05 at 09 21 30" src="https://github.com/user-attachments/assets/177837ed-1c69-4369-88ae-9d6bbd914431" />
 
 **The debugging journey — three failures before it worked:**
 
