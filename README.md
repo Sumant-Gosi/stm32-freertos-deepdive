@@ -34,7 +34,7 @@ feature/semaphores          ← replace queue with binary semaphore
 feature/task-notifications  ← replace semaphore with direct task notification
 feature/software-timers     ← replace LED task with a software timer
 feature/priority-inversion  ← demonstrate the bug, then fix it with mutex
-feature/dma-uart            ← coming soon
+feature/dma-uart            ← non-blocking UART via DMA
 ```
 
 Reading the branches in order tells the full story.
@@ -204,15 +204,61 @@ A mutex tracks ownership. FreeRTOS knows exactly which task holds it. That owner
 
 ---
 
-### Chapter 6 — DMA + UART *(coming soon)*
+### Chapter 6 — DMA + UART (`feature/dma-uart`)
 
-Currently `UART_Print()` uses `HAL_UART_Transmit()` — a blocking call. The CPU sends every byte manually and waits until transmission completes before returning.
+Every previous chapter used `HAL_UART_Transmit()` — a blocking call. While a task was printing, the CPU sat idle waiting for every single byte to be sent over the wire. At 115200 baud, transmitting 30 bytes takes roughly 2.6ms. That is 2.6ms of wasted CPU time per print call.
 
-DMA (Direct Memory Access) offloads this work to dedicated hardware. The CPU hands the data to the DMA controller and returns immediately. DMA sends the bytes in the background and fires an interrupt when done.
+DMA (Direct Memory Access) fixes this. Instead of the CPU carrying each byte to the UART register manually, the CPU hands the entire buffer to the DMA controller and returns immediately. DMA sends the bytes in the background using dedicated hardware. The CPU is free the entire time.
 
-The interesting challenge: the UART mutex must be released in the DMA completion callback, not after the function call — because the function returns before transmission is actually finished.
+```
+WITHOUT DMA:
+CPU: [send byte 1]...[send byte 2]...[send byte 3]...[done] → continue
 
-This branch is in progress.
+WITH DMA:
+CPU: [hand buffer to DMA] → continues immediately
+DMA:                      [byte1][byte2][byte3][done] → fires interrupt
+```
+
+**The challenge — when to release the lock:**
+
+In previous chapters the mutex was released immediately after `UART_Print()` returned. With DMA that is wrong — the function returns before transmission is actually finished. Releasing the mutex too early means another task can start a new DMA transfer while the old one is still running. The result is corrupted output.
+
+The solution: release the lock only when DMA signals it is done. DMA fires an interrupt on completion, which calls `HAL_UART_TxCpltCallback()` automatically. That is the correct place to release.
+
+```c
+void UART_Print(const char *msg)
+{
+    xSemaphoreTake(UartDmaSemHandle, portMAX_DELAY);
+    HAL_UART_Transmit_DMA(&huart2, (uint8_t*)msg, strlen(msg));
+    // do NOT release here — DMA still transmitting
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    // DMA finished — safe to release now
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xSemaphoreGiveFromISR(UartDmaSemHandle, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+```
+
+**The debugging journey — three failures before it worked:**
+
+*Attempt 1 — mutex in callback:* Used `osMutexRelease()` inside the callback. Output went silent after the first print. A mutex cannot be released from ISR context in FreeRTOS — it has ownership, the ISR has no task identity, the release is silently rejected.
+
+*Attempt 2 — CMSIS semaphore in callback:* Switched to `osSemaphoreRelease()`. Still silent after one print. The CMSIS wrapper is not reliably ISR-safe on all STM32 HAL versions.
+
+*Attempt 3 — native FreeRTOS semaphore, missing UART interrupt:* Used `xSemaphoreGiveFromISR()` — correct API — but only one line printed then stopped. `HAL_UART_TxCpltCallback` was never firing because `USART2_IRQn` was not enabled. Both the DMA interrupt and the UART interrupt must be active for the callback chain to complete.
+
+Final working solution uses `xSemaphoreGiveFromISR()` with both `DMA1_Stream6_IRQn` and `USART2_IRQn` enabled.
+
+**Three new concepts this chapter introduced:**
+
+`HAL_UART_TxCpltCallback` — a function HAL calls automatically when DMA finishes. You don't call it — the hardware triggers it via interrupt. TxCplt = Transmission Complete.
+
+`xSemaphoreGiveFromISR` — the ISR-safe version of `xSemaphoreGive`. Normal FreeRTOS API calls assume they run inside a task. Calling them from an interrupt corrupts RTOS internals. Every FreeRTOS function that can be called from an ISR has a `FromISR` variant.
+
+`portYIELD_FROM_ISR` — when the semaphore is given back inside an ISR, a waiting task becomes ready. Without this call that task waits until the scheduler next runs. With it, the task runs immediately when the interrupt exits. More responsive and correct.
 
 ---
 
@@ -227,7 +273,7 @@ This branch is in progress.
 | Task Notification | Lightweight direct signal between two tasks | `xTaskNotifyGive/ulTaskNotifyTake()` |
 | Software Timer | Periodic callbacks without a dedicated task | `osTimerNew/Start()` |
 | Priority Inversion | Bug where low priority blocks high priority | Fixed by mutex + priority inheritance |
-| DMA + UART | Non-blocking transmission, CPU free during transfer | `HAL_UART_Transmit_DMA()` |
+| DMA + UART | Non-blocking transmission, CPU free during transfer | `HAL_UART_Transmit_DMA()` + `xSemaphoreGiveFromISR()` |
 
 ---
 
@@ -240,8 +286,9 @@ The biggest shift was understanding that RTOS primitives are not interchangeable
 - Use a **task notification** when signaling one specific task and you want zero overhead
 - Use a **mutex** (not a semaphore) when protecting a shared resource — because only a mutex can prevent priority inversion
 - Use a **software timer** for simple periodic actions that don't need a full task
+- Use **DMA** when you want the CPU free during data transfers — but understand that async hardware requires ISR-safe synchronization primitives
 
-The priority inversion chapter was the most valuable. It turned an abstract lecture concept into something visible and tangible — a bug I could see in the serial output, understand exactly why it was happening, and fix with a single change.
+The priority inversion chapter was the most conceptually satisfying. The DMA chapter was the most practically challenging — three failed attempts before it worked, each one teaching something specific about the boundary between task context and ISR context.
 
 ---
 
