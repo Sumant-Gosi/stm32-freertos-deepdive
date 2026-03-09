@@ -252,7 +252,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 ```
-<img width="491" height="715" alt="Screenshot 2026-03-05 at 09 21 30" src="https://github.com/user-attachments/assets/177837ed-1c69-4369-88ae-9d6bbd914431" />
+<img width="513" height="687" alt="Screenshot 2026-03-05 at 10 54 14" src="https://github.com/user-attachments/assets/0cdfd424-54ff-4d7a-8c1a-cf20477bca75" />
 
 **The debugging journey — three failures before it worked:**
 
